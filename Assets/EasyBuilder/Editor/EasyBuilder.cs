@@ -150,9 +150,12 @@ public class EasyBuilder : EditorWindow
             return;
 
         var lastElement = _profilesArray.Last();
+        var index = parent.IndexOf(lastElement);
 
-        if (lastElement.value != null)
-            _currentProfiles.Remove((BaseBuildProfileSO)lastElement.value);
+        // Remove by position, even when the field was cleared: removing by value left a null
+        // entry behind, which then made Build() throw on profile.ApplyProfile().
+        if (index >= 0 && index < _currentProfiles.Count)
+            _currentProfiles.RemoveAt(index);
 
         _profilesArray.RemoveAt(_profilesArray.Count - 1);
         parent.Remove(lastElement);
@@ -170,8 +173,14 @@ public class EasyBuilder : EditorWindow
 
         foreach (var line in lines)
         {
-            if (!line.StartsWith("keystore:"))
-                finalList.Add(AssetDatabase.LoadAssetAtPath<BaseBuildProfileSO>(line));
+            if (line.StartsWith("keystore:"))
+                continue;
+
+            // Skip profiles whose asset was moved or deleted.
+            var profile = AssetDatabase.LoadAssetAtPath<BaseBuildProfileSO>(line);
+
+            if (profile != null)
+                finalList.Add(profile);
         }
 
         return finalList;
@@ -258,7 +267,9 @@ public class EasyBuilder : EditorWindow
             KeystoreProfileSO.ClearKeystore();
         }
 
-        if (_currentProfiles == null || _currentProfiles.Count == 0)
+        var profiles = _currentProfiles?.Where(profile => profile != null).ToList();
+
+        if (profiles == null || profiles.Count == 0)
         {
             Debug.LogWarning("Profile is not selected!");
             return;
@@ -272,7 +283,7 @@ public class EasyBuilder : EditorWindow
             return;
         }
 
-        foreach (var profile in _currentProfiles)
+        foreach (var profile in profiles)
         {
             profile.ApplyProfile();
             ForceResolveAutomated();
