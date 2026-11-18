@@ -15,3 +15,12 @@ MonoBehaviour:
   packageName: com.DevDude.EasyBuilder
   aabBuild: 0
   splitArchitectures: 1
+  overrideTitle: 0
+  appTitle: 
+  overrideIcon: 0
+  adaptiveBackground: {fileID: 0}
+  adaptiveForeground: {fileID: 0}
+  roundedIcon: {fileID: 0}
+  legacyIcon: {fileID: 0}
+  scenes: []
+  extraScriptingDefines: []

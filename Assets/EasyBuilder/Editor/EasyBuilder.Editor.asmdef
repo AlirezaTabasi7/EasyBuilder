@@ -1,0 +1,25 @@
+{
+    "name": "EasyBuilder.Editor",
+    "rootNamespace": "EasyBuilder",
+    "references": [
+        "Unity.Addressables",
+        "Unity.Addressables.Editor"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [
+        {
+            "name": "com.unity.addressables",
+            "expression": "1.19.11",
+            "define": "EASYBUILDER_ADDRESSABLES"
+        }
+    ],
+    "noEngineReferences": false
+}
