@@ -11,6 +11,45 @@ Supports Unity 2022.3 and Unity 6.
 
 ---
 
+## **Installation**
+Install Easy Builder in one of these two ways. Don't use both in the same project.
+
+### **Option 1: `.unitypackage` from Releases**
+1. Download the latest `.unitypackage` from the [Releases page](https://github.com/salehb02/EasyBuilder/releases).
+2. In Unity, choose **Assets → Import Package → Custom Package…** and select the downloaded file.
+3. Keep everything selected and click **Import**.
+
+The files are copied into `Assets/EasyBuilder`, where you can edit them. To update, import a newer release over them.
+
+### **Option 2: Git URL (Package Manager)**
+Requires [Git](https://git-scm.com/downloads) installed and on your `PATH`.
+
+1. In Unity, open **Window → Package Manager**.
+2. Click **+** → **Add package from git URL…**
+3. Paste this URL and click **Add**:
+   ```
+   https://github.com/salehb02/EasyBuilder.git?path=/Assets/EasyBuilder
+   ```
+
+Or add it to `Packages/manifest.json` yourself:
+```json
+{
+  "dependencies": {
+    "com.salehb02.easybuilder": "https://github.com/salehb02/EasyBuilder.git?path=/Assets/EasyBuilder"
+  }
+}
+```
+
+To pin a specific version, add a release tag to the end of the URL, for example `…?path=/Assets/EasyBuilder#v2.0.0`. Without a tag you get the latest commit on the default branch; to update, click **Update** in the Package Manager, or remove and re-add the package.
+
+Files installed through the Package Manager are read-only, including the sample profiles. Create your own profiles with **Create → Easy Builder → New Base Profile** and keystores with **Create → Easy Builder → New Keystore Profile**, or use **New Profile…** and **New Keystore Profile…** in the window.
+
+### **Optional setup**
+- **Addressables** and **External Dependency Manager (EDM4U)** are detected automatically; see [Addressables and EDM4U](#addressables-and-edm4u).
+- If your own scripts use an assembly definition and extend `BaseBuildProfileSO`, add a reference to `EasyBuilder.Editor`.
+
+---
+
 ## **How to Open**
 **Tools → Easy Builder**
 
