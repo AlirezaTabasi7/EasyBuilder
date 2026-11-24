@@ -37,6 +37,24 @@ namespace EasyBuilder
 
             public string OutputFolder;
             public bool ForceResolveAndroidDependencies = true;
+
+            /// <summary>
+            /// What changed in this version, one change per line, optionally as <c>type(scope): text</c>. When set, the
+            /// notes are grouped by type (features, fixes, …) into Changelog_v&lt;version&gt;_&lt;build&gt;.md in the output folder.
+            /// </summary>
+            public string Changelog;
+
+            /// <summary>
+            /// Optional running changelog (e.g. CHANGELOG.md), relative to the project folder or absolute. When set
+            /// and every profile built, an entry for this version is added at the top.
+            /// </summary>
+            public string ChangelogHistoryFile;
+
+            /// <summary>Which kinds of changes are written out. Breaking changes always are.</summary>
+            public ChangelogDetail ChangelogDetail = ChangelogDetail.Normal;
+
+            /// <summary>Set by <see cref="Run"/>: the release-notes file it wrote, or null.</summary>
+            public string WrittenChangelogPath { get; internal set; }
         }
 
         public sealed class ProfileResult
@@ -124,6 +142,8 @@ namespace EasyBuilder
                 }
             }
 
+            EasyBuilder.Changelog.Validate(request.ChangelogHistoryFile, errors);
+
             if (checkOutputFolder)
             {
                 if (string.IsNullOrWhiteSpace(request.OutputFolder))
@@ -201,7 +221,9 @@ namespace EasyBuilder
 
             var allSucceeded = results.Count == profiles.Count && results.All(result => result.Result == BuildResult.Succeeded);
 
-            var summary = Summarize(results, profiles.Count, request.OutputFolder);
+            WriteChangelog(request, target, results, allSucceeded);
+
+            var summary = Summarize(results, profiles.Count, request.OutputFolder, request.WrittenChangelogPath);
 
             if (allSucceeded)
                 Debug.Log(summary);
@@ -209,6 +231,53 @@ namespace EasyBuilder
                 Debug.LogError(summary);
 
             return results;
+        }
+
+        // Runs after the batch snapshot is restored, so version, build number and product name are the project's.
+        private static void WriteChangelog(Request request, BuildTarget target, List<ProfileResult> results, bool allSucceeded)
+        {
+            request.WrittenChangelogPath = null;
+            var notes = EasyBuilder.Changelog.Normalize(request.Changelog);
+
+            if (notes.Length == 0 || !results.Any(result => result.Result == BuildResult.Succeeded))
+                return;
+
+            var formatted = EasyBuilder.Changelog.Format(notes, request.ChangelogDetail);
+
+            if (formatted.Length == 0)
+            {
+                Debug.LogWarning($"[EasyBuilder] No changelog was written: at the {request.ChangelogDetail} detail level, none of the notes are listed.");
+                return;
+            }
+
+            try
+            {
+                request.WrittenChangelogPath = EasyBuilder.Changelog.WriteReleaseNotes(request.OutputFolder, formatted, target);
+                Debug.Log($"[EasyBuilder] Wrote the changelog to {request.WrittenChangelogPath}");
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[EasyBuilder] Couldn't write the changelog file: {e.Message}");
+            }
+
+            if (string.IsNullOrWhiteSpace(request.ChangelogHistoryFile))
+                return;
+
+            if (!allSucceeded)
+            {
+                Debug.LogWarning("[EasyBuilder] Not every profile built, so the changelog history file was left unchanged.");
+                return;
+            }
+
+            try
+            {
+                var historyPath = EasyBuilder.Changelog.UpdateHistory(request.ChangelogHistoryFile, notes, request.ChangelogDetail, target);
+                Debug.Log($"[EasyBuilder] Added this version to the changelog history in {historyPath}");
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[EasyBuilder] Couldn't update the changelog history file: {e.Message}");
+            }
         }
 
         private static ProfileResult BuildProfile(BaseBuildProfileSO profile, BuildTarget target, Request request)
@@ -241,7 +310,10 @@ namespace EasyBuilder
 
                 var report = BuildPipeline.BuildPlayer(options);
                 result.Result = report.summary.result;
-                result.TotalSize = report.summary.totalSize;
+
+                // summary.totalSize is the size of the build's content before packaging, not of the APK, AAB or
+                // project that was written, so measure the output on disk instead.
+                result.TotalSize = GetSizeOnDisk(result.OutputPath) ?? report.summary.totalSize;
 
                 if (result.Result == BuildResult.Cancelled)
                     result.Error = "Canceled.";
@@ -376,7 +448,8 @@ namespace EasyBuilder
             Debug.Log($"[EasyBuilder] Build number is now {GetBuildNumber(target)}.");
         }
 
-        public static string Summarize(IReadOnlyList<ProfileResult> results, int profileCount, string outputFolder)
+        public static string Summarize(IReadOnlyList<ProfileResult> results, int profileCount, string outputFolder,
+            string changelogPath = null)
         {
             var succeeded = results.Count(result => result.Result == BuildResult.Succeeded);
             var text = new StringBuilder();
@@ -397,6 +470,9 @@ namespace EasyBuilder
             if (skipped > 0)
                 text.AppendLine($"  {skipped} remaining profile(s) were not built.");
 
+            if (!string.IsNullOrEmpty(changelogPath))
+                text.AppendLine($"Changelog: {changelogPath}");
+
             return text.ToString();
         }
 
@@ -414,6 +490,11 @@ namespace EasyBuilder
         /// <item><c>-ebKeystore &lt;asset path or GUID&gt;</c> keystore profile. Defaults to the window's selection.</item>
         /// <item><c>-ebVersion &lt;version&gt;</c> and <c>-ebBuildNumber &lt;number&gt;</c> set them before building.</item>
         /// <item><c>-ebSkipDependencyResolve</c> skips the EDM4U Android dependency resolve.</item>
+        /// <item><c>-ebChangelog "&lt;text&gt;"</c> or <c>-ebChangelogFile &lt;path&gt;</c> the changes in this version,
+        /// written to a changelog file next to the builds. Defaults to the window's notes.</item>
+        /// <item><c>-ebChangelogHistory &lt;path&gt;</c> a running changelog (e.g. CHANGELOG.md) to add this version to.
+        /// Defaults to the window's setting.</item>
+        /// <item><c>-ebChangelogDetail Brief|Normal|Detailed</c> which changes are written. Defaults to the window's setting.</item>
         /// </list>
         /// Keystore passwords are read from the environment variables named in the keystore profile.
         /// Exits with code 0 when every profile built and 1 otherwise.
@@ -446,7 +527,43 @@ namespace EasyBuilder
                 Keystore = saved.Keystore,
                 OutputFolder = GetArgument(args, "-ebOutput"),
                 ForceResolveAndroidDependencies = !args.Contains("-ebSkipDependencyResolve"),
+                Changelog = saved.Changelog,
+                ChangelogHistoryFile = saved.ChangelogHistoryFile,
+                ChangelogDetail = saved.ChangelogDetail,
             };
+
+            var changelogText = GetArgument(args, "-ebChangelog");
+            var changelogFile = GetArgument(args, "-ebChangelogFile");
+
+            if (changelogFile != null)
+            {
+                var changelogPath = EasyBuilder.Changelog.ResolvePath(changelogFile);
+
+                if (File.Exists(changelogPath))
+                    request.Changelog = File.ReadAllText(changelogPath);
+                else
+                    errors.Add($"Changelog file not found: {changelogFile}");
+            }
+            else if (changelogText != null)
+            {
+                // A command line can't easily hold line breaks, so "\n" in the text starts a new line.
+                request.Changelog = changelogText.Replace("\\n", "\n");
+            }
+
+            var historyArgument = GetArgument(args, "-ebChangelogHistory");
+
+            if (historyArgument != null)
+                request.ChangelogHistoryFile = historyArgument;
+
+            var detailArgument = GetArgument(args, "-ebChangelogDetail");
+
+            if (detailArgument != null)
+            {
+                if (EasyBuilder.Changelog.TryParseDetail(detailArgument, out var detail))
+                    request.ChangelogDetail = detail;
+                else
+                    errors.Add($"-ebChangelogDetail must be Brief, Normal or Detailed, got '{detailArgument}'.");
+            }
 
             var profileArgument = GetArgument(args, "-ebProfiles");
 
@@ -551,7 +668,29 @@ namespace EasyBuilder
                    full.StartsWith(assets + "/", StringComparison.OrdinalIgnoreCase);
         }
 
-        private static string SanitizeFileName(string name)
+        /// <summary>The size of a build file, or of every file in a build folder; null if it doesn't exist.</summary>
+        private static ulong? GetSizeOnDisk(string path)
+        {
+            if (string.IsNullOrEmpty(path))
+                return null;
+
+            try
+            {
+                if (File.Exists(path))
+                    return (ulong)new FileInfo(path).Length;
+
+                if (Directory.Exists(path))
+                    return (ulong)new DirectoryInfo(path).EnumerateFiles("*", SearchOption.AllDirectories).Sum(file => file.Length);
+            }
+            catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
+            {
+                Debug.LogWarning($"[EasyBuilder] Couldn't measure the size of {path}: {e.Message}");
+            }
+
+            return null;
+        }
+
+        internal static string SanitizeFileName(string name)
         {
             foreach (var invalid in Path.GetInvalidFileNameChars())
                 name = name.Replace(invalid, '_');

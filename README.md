@@ -40,12 +40,13 @@ Or add it to `Packages/manifest.json` yourself:
 }
 ```
 
-To pin a specific version, add a release tag to the end of the URL, for example `…?path=/Assets/EasyBuilder#v2.0.0`. Without a tag you get the latest commit on the default branch; to update, click **Update** in the Package Manager, or remove and re-add the package.
+To pin a specific version, add a release tag to the end of the URL, for example `…?path=/Assets/EasyBuilder#v2.1`. Without a tag you get the latest commit on the default branch; to update, click **Update** in the Package Manager, or remove and re-add the package.
 
 Files installed through the Package Manager are read-only, including the sample profiles. Create your own profiles with **Create → Easy Builder → New Base Profile** and keystores with **Create → Easy Builder → New Keystore Profile**, or use **New Profile…** and **New Keystore Profile…** in the window.
 
 ### **Optional setup**
 - **Addressables** and **External Dependency Manager (EDM4U)** are detected automatically; see [Addressables and EDM4U](#addressables-and-edm4u).
+- To generate changelogs with AI, install Unity's **AI Assistant** package or the **Claude Code**, **Codex** or **Gemini** command-line tool; see [Auto Generate](#auto-generate).
 - If your own scripts use an assembly definition and extend `BaseBuildProfileSO`, add a reference to `EasyBuilder.Editor`.
 
 ---
@@ -63,7 +64,8 @@ Files installed through the Package Manager are read-only, including the sample 
 - Per-profile scene list and extra scripting define symbols
 - Profile-based keystore selection, with passwords kept out of the asset
 - Addressables content build and EDM4U Android dependency resolution, detected automatically
-- A summary at the end, with a button to show the builds in their folder
+- A summary at the end, with a button to show the builds in their folder, or open the folder automatically
+- Changelog grouped by feat / fix / …, with detail levels, generation from git commits with an AI of your choice (Unity AI Assistant, Claude Code, Codex, Gemini), and an optional running `CHANGELOG.md`
 - Command-line entry point for CI
 
 ---
@@ -121,7 +123,80 @@ The window builds every selected profile in order:
 The batch stops at the first failed or canceled build. All builds go into the folder you pick, named
 `<package>_v<version>_<build number>_<profile name>` (`.apk` or `.aab` for single-file Android builds; split APKs, exported Gradle projects and Xcode projects are folders).
 
+Turn on **Open Folder When Done** in the Output section to show the build folder as soon as the batch finishes (when at least one build succeeded).
+
+The size in the summary is the size of the APK, AAB or project folder that was written to disk.
+
 The profile selection is saved per user in `UserSettings/EasyBuilderSettings.asset`, which Unity's default `.gitignore` excludes.
+
+---
+
+## **Changelog**
+Write what changed in the **Changelog** section of the window, one change per line. Start a line with its type to group it:
+
+```
+feat: New level select
+fix(ui): Button overlap on small screens
+perf: Faster loading
+refactor!: New save format
+  Old saves are migrated on first launch
+Tweaked the tutorial text
+```
+
+After the batch, Easy Builder writes only your notes, grouped and sorted, to `Changelog_v<version>_<build number>.md` in the output folder:
+
+| Group | Types | Shown from |
+|---|---|---|
+| Features | `feat` | Brief |
+| Fixes | `fix` | Brief |
+| Performance | `perf` | Normal |
+| Changes | `refactor`, `change`, `improve`, `update`, `style`, `revert` | Normal |
+| Documentation | `docs` | Detailed |
+| Maintenance | `chore`, `build`, `ci`, `test`, `deps` | Detailed |
+| Other | lines without a type | Brief |
+
+- **Detail Level** picks which groups are written. *Normal* also shows scopes (`ui:`), and *Detailed* also includes the indented detail lines. Breaking changes (`type!:`) are always listed.
+- A markdown heading such as `## Fixes` puts the untagged lines under it into that group, so you can paste an existing changelog.
+- Leave the notes empty to skip the changelog.
+- The notes stay in the window after a build, so update them before building the next version.
+- The notes, detail level, history file, AI choice and timeout are saved per user in `UserSettings/EasyBuilderSettings.asset`, like the profile selection.
+
+### **Auto Generate**
+Pick an AI in the **AI** list under Detail Level and click **Auto Generate**. The list always shows every supported AI; one that isn't installed is marked *(not installed)*, with a note on how to install it, and can't be used until it is.
+
+| AI | Installed when |
+|---|---|
+| Unity AI Assistant | The `com.unity.ai.assistant` package (2.19 or newer) is installed. Needs you to be signed in to Unity. |
+| Claude Code | `claude` is installed (on the `PATH`, or in `~/.local/bin`). |
+| Codex CLI | `codex` is installed. |
+| Gemini CLI | `gemini` is installed. |
+
+Command-line tools use your own login or API key, so sign in to them once in a terminal first. They run in the temp folder with their tools turned off, so they can't read or change your project.
+
+Auto Generate reads the git commits since the last tag (or the last 200 when there is no tag) and asks the selected AI to write the notes at the selected detail level. You can replace your notes or add the generated ones below them. Review the notes before building.
+
+While it runs, the button turns into **Cancel**. **AI Timeout (s)** (120 by default) stops waiting after that many seconds and stops the tool.
+
+Auto Generate is only available in the window. On CI, pass notes with `-ebChangelogFile` instead.
+
+### **History file**
+Set **History File** (for example `CHANGELOG.md`, relative to the project folder) to also keep a running changelog. When every profile builds, an entry is added at the top:
+
+```markdown
+# Changelog
+
+## v1.2.0 (build 42) - 2026-11-24
+
+### Features
+
+- New level select
+
+### Fixes
+
+- **ui:** Button overlap on small screens
+```
+
+Rebuilding the same version and build number replaces its entry instead of adding a second one. Nothing is added when a build fails or the notes are empty. On CI, pass the notes with `-ebChangelog` or `-ebChangelogFile` (see below).
 
 ---
 
@@ -152,6 +227,16 @@ Unity -batchmode -quit -projectPath . -buildTarget Android ^
 | `-ebVersion <version>` | Sets the version before building. |
 | `-ebBuildNumber <number>` | Sets the build number before building. |
 | `-ebSkipDependencyResolve` | Skips the EDM4U Android dependency resolve. |
+| `-ebChangelog "<text>"` | Changelog notes. Write `\n` for a line break. Defaults to the window's notes. |
+| `-ebChangelogFile <path>` | Reads the changelog notes from a file instead (relative to the project folder or absolute), for example one your pipeline generates from `git log`. Takes priority over `-ebChangelog`. |
+| `-ebChangelogHistory <path>` | Running changelog to add this version to (relative to the project folder or absolute). Defaults to the window's setting. |
+| `-ebChangelogDetail <level>` | `Brief`, `Normal` or `Detailed`. Defaults to the window's setting. |
+
+For example, to use the commit messages since the last tag as the notes (bash):
+```bash
+git log $(git describe --tags --abbrev=0)..HEAD --no-merges --pretty=format:"%s" > notes.md
+Unity ... -executeMethod EasyBuilder.BuildRunner.BuildFromCommandLine -ebOutput Builds -ebChangelogFile notes.md -ebChangelogHistory CHANGELOG.md
+```
 
 Unity exits with code 0 when every profile built and 1 otherwise.
 

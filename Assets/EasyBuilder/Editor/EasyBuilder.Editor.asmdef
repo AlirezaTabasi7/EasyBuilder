@@ -3,7 +3,9 @@
     "rootNamespace": "EasyBuilder",
     "references": [
         "Unity.Addressables",
-        "Unity.Addressables.Editor"
+        "Unity.Addressables.Editor",
+        "Unity.AI.Assistant.API.Editor",
+        "Unity.AI.Assistant.Runtime"
     ],
     "includePlatforms": [
         "Editor"
@@ -19,6 +21,11 @@
             "name": "com.unity.addressables",
             "expression": "1.19.11",
             "define": "EASYBUILDER_ADDRESSABLES"
+        },
+        {
+            "name": "com.unity.ai.assistant",
+            "expression": "2.19.0-pre.2",
+            "define": "EASYBUILDER_AI_ASSISTANT"
         }
     ],
     "noEngineReferences": false
