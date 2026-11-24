@@ -35,7 +35,16 @@ namespace EasyBuilder
         private Button _buildButton;
         private Button _addSlotButton;
         private Button _openOutputButton;
+        private Button _generateChangelogButton;
+        private VisualElement _changelogAISection;
+        private VisualElement _changelogAIFieldHolder;
+        private PopupField<ChangelogAI> _changelogAIField;
+        private string _changelogAIIds;
+        private HelpBox _changelogAIMissing;
+        private System.Threading.CancellationTokenSource _generateCancellation;
         private bool _buildQueued;
+
+        private const string GenerateChangelogText = "Auto Generate";
 
         [MenuItem("Tools/Easy Builder")]
         public static void OpenBuilder()
@@ -53,7 +62,13 @@ namespace EasyBuilder
 
         private void OnEnable() => Undo.undoRedoPerformed += OnUndoRedo;
 
-        private void OnDisable() => Undo.undoRedoPerformed -= OnUndoRedo;
+        private void OnDisable()
+        {
+            Undo.undoRedoPerformed -= OnUndoRedo;
+
+            // Closing the window or a script reload stops a running AI tool instead of leaving it behind.
+            _generateCancellation?.Cancel();
+        }
 
         private void OnUndoRedo()
         {
@@ -96,6 +111,7 @@ namespace EasyBuilder
             content.Add(CreateVersionSection());
             content.Add(CreateProfilesSection());
             content.Add(_signingSection = CreateSigningSection());
+            content.Add(CreateChangelogSection());
             content.Add(CreateOutputSection());
 
             root.Add(CreateFooter());
@@ -285,7 +301,209 @@ namespace EasyBuilder
             row.Add(_openOutputButton);
             section.Add(row);
 
+            section.Add(new PropertyField(_settings.FindProperty(EasyBuilderSettings.OpenOutputFolderProperty), "Open Folder When Done")
+            {
+                tooltip = "Show the build folder in the file browser when the batch finishes and at least one build succeeded.",
+            });
+
             return section;
+        }
+
+        private VisualElement CreateChangelogSection()
+        {
+            var section = CreateSection("Changelog",
+                "One change per line, e.g. \"feat: New shop\" or \"fix(ui): Button overlap\". Grouped as Features, Fixes, … " +
+                "into Changelog_v<version>_<build>.md next to the builds. Leave empty to skip.");
+
+            var notesField = new TextField { multiline = true, isDelayed = true, bindingPath = EasyBuilderSettings.ChangelogProperty };
+            notesField.style.minHeight = 70;
+            notesField.style.whiteSpace = WhiteSpace.Normal;
+            section.Add(notesField);
+
+            section.Add(new PropertyField(_settings.FindProperty(EasyBuilderSettings.ChangelogDetailProperty), "Detail Level")
+            {
+                tooltip = "Brief: features, fixes and untagged notes. Normal: also performance and other changes, with scopes. " +
+                          "Detailed: everything, including docs, maintenance and indented detail lines. Breaking changes are always listed.",
+            });
+
+            // Lists every AI Easy Builder supports; see RefreshChangelogAI.
+            _changelogAISection = new VisualElement();
+
+            var aiRow = new VisualElement();
+            aiRow.style.flexDirection = FlexDirection.Row;
+            _changelogAIFieldHolder = new VisualElement();
+            _changelogAIFieldHolder.style.flexGrow = 1;
+            _changelogAIFieldHolder.style.flexShrink = 1;
+            aiRow.Add(_changelogAIFieldHolder);
+
+            _generateChangelogButton = new Button(OnGenerateChangelogClicked) { text = GenerateChangelogText };
+            aiRow.Add(_generateChangelogButton);
+            _changelogAISection.Add(aiRow);
+
+            _changelogAIMissing = new HelpBox(string.Empty, HelpBoxMessageType.Info);
+            _changelogAISection.Add(_changelogAIMissing);
+
+            var timeoutField = new IntegerField("AI Timeout (s)")
+            {
+                isDelayed = true,
+                bindingPath = EasyBuilderSettings.ChangelogAITimeoutProperty,
+                tooltip = $"Stop waiting for the AI after this many seconds ({ChangelogGenerator.MinTimeoutSeconds} to {ChangelogGenerator.MaxTimeoutSeconds}).",
+            };
+            timeoutField.RegisterValueChangedCallback(evt =>
+            {
+                var clamped = Mathf.Clamp(evt.newValue, ChangelogGenerator.MinTimeoutSeconds, ChangelogGenerator.MaxTimeoutSeconds);
+
+                if (clamped != evt.newValue)
+                    SetSetting(EasyBuilderSettings.ChangelogAITimeoutProperty, property => property.intValue = clamped);
+            });
+            _changelogAISection.Add(timeoutField);
+            section.Add(_changelogAISection);
+
+            var historyField = new TextField("History File")
+            {
+                isDelayed = true,
+                bindingPath = EasyBuilderSettings.ChangelogHistoryFileProperty,
+                tooltip = "Optional, e.g. CHANGELOG.md (relative to the project folder). When every profile builds, " +
+                          "this version's notes are added at the top. Rebuilding the same version and build number replaces its entry.",
+            };
+            historyField.RegisterValueChangedCallback(_ => RefreshValidation());
+            section.Add(WithSideButtons(historyField, ("Browse…", "Choose or create the changelog history file.", BrowseChangelogHistoryFile)));
+
+            return section;
+        }
+
+        // AI tools can be installed or removed while the editor is open, so this runs whenever the window gets focus.
+        private void RefreshChangelogAI()
+        {
+            var installed = ChangelogGenerator.All.Where(ai => ai.IsAvailable()).Select(ai => ai.Id).ToList();
+            var installedKey = string.Join(",", installed);
+            var selected = ChangelogGenerator.Resolve(EasyBuilderSettings.instance.ChangelogAI);
+
+            // Rebuild the popup only when what's installed changed (the labels show it), so an open popup isn't
+            // closed every time.
+            if (_changelogAIField == null || installedKey != _changelogAIIds)
+            {
+                _changelogAIIds = installedKey;
+                _changelogAIFieldHolder.Clear();
+
+                string Label(ChangelogAI ai) => installed.Contains(ai.Id) ? ai.DisplayName : $"{ai.DisplayName} (not installed)";
+
+                _changelogAIField = new PopupField<ChangelogAI>("AI", ChangelogGenerator.All.ToList(), selected, Label, Label)
+                {
+                    tooltip = "The AI that writes the notes. Command-line tools use your own login, so sign in to them once in a terminal.",
+                };
+                _changelogAIField.RegisterValueChangedCallback(evt =>
+                {
+                    EasyBuilderSettings.instance.ChangelogAI = evt.newValue?.Id;
+                    RefreshChangelogAI();
+                });
+                _changelogAIField.SetEnabled(_generateCancellation == null);
+                _changelogAIFieldHolder.Add(_changelogAIField);
+            }
+            else
+            {
+                _changelogAIField.SetValueWithoutNotify(selected);
+            }
+
+            var isInstalled = installed.Contains(selected.Id);
+            SetVisible(_changelogAIMissing, !isInstalled);
+            _changelogAIMissing.text = $"{selected.DisplayName} isn't installed. {selected.InstallHint}";
+
+            // While generating, the button is the Cancel button.
+            if (_generateCancellation != null)
+                return;
+
+            _generateChangelogButton.SetEnabled(isInstalled);
+            _generateChangelogButton.tooltip = isInstalled
+                ? $"Write the notes with {selected.DisplayName} from the git commits since the last tag, at the selected detail level."
+                : $"{selected.DisplayName} isn't installed. Pick another AI, or install it.";
+        }
+
+        private void OnGenerateChangelogClicked()
+        {
+            if (_generateCancellation != null)
+                _generateCancellation.Cancel();
+            else
+                GenerateChangelog();
+        }
+
+        private async void GenerateChangelog()
+        {
+            var settings = EasyBuilderSettings.instance;
+            var current = settings.CreateRequest();
+            var ai = ChangelogGenerator.Resolve(settings.ChangelogAI);
+
+            // It may have been uninstalled since the window last checked.
+            if (!ai.IsAvailable())
+            {
+                RefreshChangelogAI();
+                return;
+            }
+
+            var append = false;
+
+            if (!string.IsNullOrWhiteSpace(current.Changelog))
+            {
+                var choice = EditorUtility.DisplayDialogComplex("Auto Generate Changelog",
+                    "The changelog already has notes. Replace them, or add the generated notes below them?", "Replace", "Cancel", "Add Below");
+
+                if (choice == 1)
+                    return;
+
+                append = choice == 2;
+            }
+
+            _generateCancellation = new System.Threading.CancellationTokenSource();
+            _generateChangelogButton.text = "Cancel";
+            _generateChangelogButton.tooltip = $"Stop waiting for {ai.DisplayName}.";
+            _changelogAIField?.SetEnabled(false);
+            Debug.Log($"[EasyBuilder] Generating the changelog with {ai.DisplayName}...");
+
+            try
+            {
+                var generated = await ChangelogGenerator.GenerateAsync(ai, current.ChangelogDetail, settings.ChangelogAITimeout,
+                    _generateCancellation.Token);
+
+                // The window may have been closed while the AI was answering.
+                if (_settings == null || _settings.targetObject == null)
+                    return;
+
+                var notes = append ? Changelog.Normalize(current.Changelog) + "\n" + generated : generated;
+                SetSetting(EasyBuilderSettings.ChangelogProperty, property => property.stringValue = notes);
+                Debug.Log($"[EasyBuilder] {ai.DisplayName} wrote the changelog notes. Review them before building.");
+            }
+            catch (System.OperationCanceledException)
+            {
+                Debug.Log("[EasyBuilder] Changelog generation canceled.");
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogException(e);
+                EditorUtility.DisplayDialog("Auto Generate Changelog",
+                    $"{ai.DisplayName} couldn't generate the changelog:\n\n" + Truncate(e.Message), "OK");
+            }
+            finally
+            {
+                _generateCancellation.Dispose();
+                _generateCancellation = null;
+
+                if (_generateChangelogButton != null)
+                {
+                    _generateChangelogButton.text = GenerateChangelogText;
+                    _changelogAIField?.SetEnabled(true);
+                    RefreshChangelogAI();
+                }
+            }
+        }
+
+        private void BrowseChangelogHistoryFile()
+        {
+            var current = EasyBuilderSettings.instance.CreateRequest().ChangelogHistoryFile;
+            var folder = string.IsNullOrWhiteSpace(current) ? Changelog.ProjectFolder : Path.GetDirectoryName(Changelog.ResolvePath(current));
+            var path = EditorUtility.SaveFilePanel("Choose changelog history file", folder, "CHANGELOG", "md");
+
+            if (!string.IsNullOrEmpty(path))
+                SetSetting(EasyBuilderSettings.ChangelogHistoryFileProperty, property => property.stringValue = Changelog.ToProjectRelative(path));
         }
 
         private VisualElement CreateFooter()
@@ -340,6 +558,7 @@ namespace EasyBuilder
 
             _passwords.SetKeystore(keystore);
             _profileList.Refresh();
+            RefreshChangelogAI();
             RefreshValidation();
         }
 
@@ -518,7 +737,7 @@ namespace EasyBuilder
             }
 
             var results = BuildRunner.Run(request);
-            ShowSummary(results, request.Profiles.Count, outputFolder);
+            ShowSummary(results, request.Profiles.Count, outputFolder, request.WrittenChangelogPath, settings.OpenOutputFolderWhenDone);
         }
 
         private static void ShowErrors(List<string> errors)
@@ -528,19 +747,29 @@ namespace EasyBuilder
             EditorUtility.DisplayDialog("Easy Builder: can't build yet", Truncate(message), "OK");
         }
 
-        private static void ShowSummary(List<BuildRunner.ProfileResult> results, int profileCount, string outputFolder)
+        private static void ShowSummary(List<BuildRunner.ProfileResult> results, int profileCount, string outputFolder,
+            string changelogPath, bool openFolder)
         {
-            var message = BuildRunner.Summarize(results, profileCount, outputFolder);
+            var message = BuildRunner.Summarize(results, profileCount, outputFolder, changelogPath);
             var allSucceeded = results.Count == profileCount && results.All(result => result.Result == BuildResult.Succeeded);
-
-            if (!EditorUtility.DisplayDialog(allSucceeded ? "Easy Builder: done" : "Easy Builder: build failed",
-                    Truncate(message), "Show in Folder", "Close"))
-                return;
-
-            // Revealing the last build selects it in the file browser; fall back to the folder itself.
+            var title = allSucceeded ? "Easy Builder: done" : "Easy Builder: build failed";
             var lastBuild = results.LastOrDefault(result => result.Result == BuildResult.Succeeded)?.OutputPath;
-            EditorUtility.RevealInFinder(string.IsNullOrEmpty(lastBuild) ? outputFolder : lastBuild);
+
+            // Nothing was built, so there is nothing new in the folder to show.
+            if (openFolder && lastBuild != null)
+            {
+                RevealBuild(lastBuild, outputFolder);
+                EditorUtility.DisplayDialog(title, Truncate(message), "Close");
+                return;
+            }
+
+            if (EditorUtility.DisplayDialog(title, Truncate(message), "Show in Folder", "Close"))
+                RevealBuild(lastBuild, outputFolder);
         }
+
+        // Revealing the last build selects it in the file browser; fall back to the folder itself.
+        private static void RevealBuild(string lastBuild, string outputFolder) =>
+            EditorUtility.RevealInFinder(string.IsNullOrEmpty(lastBuild) ? outputFolder : lastBuild);
 
         private static string Truncate(string text) =>
             text.Length <= MaxDialogLength ? text : text.Substring(0, MaxDialogLength) + "…\n\n(See the Console for the full message.)";

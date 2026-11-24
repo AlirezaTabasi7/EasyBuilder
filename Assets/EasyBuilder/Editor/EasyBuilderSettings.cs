@@ -17,12 +17,23 @@ namespace EasyBuilder
         public const string KeystoreProperty = nameof(keystore);
         public const string ResolveDependenciesProperty = nameof(forceResolveAndroidDependencies);
         public const string OutputFolderProperty = nameof(lastOutputFolder);
+        public const string OpenOutputFolderProperty = nameof(openOutputFolderWhenDone);
+        public const string ChangelogProperty = nameof(changelog);
+        public const string ChangelogHistoryFileProperty = nameof(changelogHistoryFile);
+        public const string ChangelogDetailProperty = nameof(changelogDetail);
+        public const string ChangelogAITimeoutProperty = nameof(changelogAITimeout);
 
         [SerializeField] private List<BaseBuildProfileSO> profiles = new();
         [SerializeField] private List<BaseBuildProfileSO> disabledProfiles = new();
         [SerializeField] private KeystoreProfileSO keystore;
         [SerializeField] private bool forceResolveAndroidDependencies = true;
         [SerializeField] private string lastOutputFolder;
+        [SerializeField] private bool openOutputFolderWhenDone;
+        [SerializeField, TextArea] private string changelog;
+        [SerializeField] private string changelogHistoryFile;
+        [SerializeField] private ChangelogDetail changelogDetail = ChangelogDetail.Normal;
+        [SerializeField] private string changelogAI;
+        [SerializeField] private int changelogAITimeout = ChangelogGenerator.DefaultTimeoutSeconds;
         [SerializeField] private bool legacySelectionImported;
 
         public KeystoreProfileSO Keystore => keystore;
@@ -83,6 +94,21 @@ namespace EasyBuilder
             set => lastOutputFolder = value;
         }
 
+        public bool OpenOutputFolderWhenDone => openOutputFolderWhenDone;
+
+        /// <summary>The id of the AI picked for generating changelogs; see <see cref="ChangelogGenerator.All"/>.</summary>
+        public string ChangelogAI
+        {
+            get => changelogAI;
+            set
+            {
+                changelogAI = value;
+                SaveSettings();
+            }
+        }
+
+        public int ChangelogAITimeout => changelogAITimeout;
+
         public void SaveSettings() => Save(true);
 
         public BuildRunner.Request CreateRequest() => new()
@@ -90,6 +116,9 @@ namespace EasyBuilder
             Profiles = profiles.Where(IsProfileEnabled).ToList(),
             Keystore = keystore,
             ForceResolveAndroidDependencies = forceResolveAndroidDependencies,
+            Changelog = changelog,
+            ChangelogHistoryFile = changelogHistoryFile,
+            ChangelogDetail = changelogDetail,
         };
 
         // Up to v1.2 the selection was kept in Assets/Plugins/buildProfile.txt.
